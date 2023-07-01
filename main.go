@@ -1,108 +1,100 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"log"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
-
-	"github.com/gocolly/colly"
 )
 
 func main() {
-	// 创建一个新的Colly爬虫
-	c := colly.NewCollector()
+	// 获取用户输入的网站
+	var website string
+	fmt.Print("请输入要扫描的网站: ")
+	fmt.Scanln(&website)
 
-	// 创建一个互斥锁，用于保护文件写入操作
-	var mutex sync.Mutex
+	// 获取用户输入的目录字典文件路径
+	var filePath string
+	fmt.Print("请输入目录字典文件的路径: ")
+	fmt.Scanln(&filePath)
 
-	// 创建文件
+	// 读取目录字典文件内容
+	content, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		fmt.Printf("无法读取目录字典文件: %s\n", err)
+		return
+	}
+
+	// 将文件内容按行分割成目录列表
+	directories := strings.Split(string(content), "\n")
+
+	// 创建一个等待组，用于等待所有扫描任务完成
+	var wg sync.WaitGroup
+
+	// 创建一个缓冲通道，用于保存扫描结果
+	resultChan := make(chan string, len(directories))
+
+	// 遍历目录列表，为每个目录启动一个扫描任务
+	for _, dir := range directories {
+		// 去除目录前后的空白字符
+		dir = strings.TrimSpace(dir)
+
+		// 跳过空白行
+		if dir == "" {
+			continue
+		}
+
+		// 增加等待组的计数器
+		wg.Add(1)
+
+		// 启动一个Go协程来扫描目录
+		go func(directory string) {
+			defer wg.Done()
+
+			// 构建完整的URL
+			url := website + directory
+
+			// 获取HTTP客户端
+			client := &http.Client{}
+
+			// 发起HTTP请求
+			resp, err := client.Get(url)
+			if err != nil {
+				fmt.Printf("无法访问目录 %s: %s\n", directory, err)
+				return
+			}
+			defer resp.Body.Close()
+
+			// 读取响应内容
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				fmt.Printf("无法读取目录 %s 的响应: %s\n", directory, err)
+				return
+			}
+
+			// 将扫描结果发送到通道
+			resultChan <- fmt.Sprintf("目录 %s 的响应内容:\n%s\n", directory, body)
+		}(dir)
+	}
+
+	// 等待所有扫描任务完成
+	wg.Wait()
+
+	// 关闭通道，确保所有结果都已经发送完毕
+	close(resultChan)
+
+	// 创建一个文件，用于保存扫描结果
 	file, err := os.Create("data.txt")
 	if err != nil {
-		log.Fatal("创建文件失败:", err)
+		fmt.Printf("无法创建文件: %s\n", err)
+		return
 	}
 	defer file.Close()
 
-	// 获取用户输入的目标网站
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("请输入目标网站: ")
-	targetSite, _ := reader.ReadString('\n')
-	targetSite = strings.TrimSpace(targetSite)
-
-	// 获取用户输入的目录字典
-	fmt.Print("请输入目录字典（每行一个目录）: ")
-	dictionaryFile, _ := reader.ReadString('\n')
-
-	// 创建等待组
-	var wg sync.WaitGroup
-
-	// 设置回调函数，处理每个访问的网页
-	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
-		link := e.Attr("href")
-		if strings.HasSuffix(link, "/") {
-			fmt.Println("目录:", link)
-
-			// 使用等待组增加计数
-			wg.Add(1)
-
-			// 使用goroutine并发处理文件写入操作
-			go func(link string) {
-				// 使用互斥锁保护文件写入操作
-				mutex.Lock()
-				defer mutex.Unlock()
-
-				// 写入文件
-				_, err := file.WriteString(fmt.Sprintf("目录: %s\n", link))
-				if err != nil {
-					log.Println("写入文件失败:", err)
-				}
-
-				// 完成goroutine，减少等待组计数
-				wg.Done()
-			}(link)
-		} else {
-			fmt.Println("文件:", link)
-
-			// 使用等待组增加计数
-			wg.Add(1)
-
-			// 使用goroutine并发处理文件写入操作
-			go func(link string) {
-				// 使用互斥锁保护文件写入操作
-				mutex.Lock()
-				defer mutex.Unlock()
-
-				// 写入文件
-				_, err := file.WriteString(fmt.Sprintf("文件: %s\n", link))
-				if err != nil {
-					log.Println("写入文件失败:", err)
-				}
-
-				// 完成goroutine，减少等待组计数
-				wg.Done()
-			}(link)
-		}
-	})
-
-	// 设置错误处理函数
-	c.OnError(func(r *colly.Response, err error) {
-		// 记录错误日志
-		log.Println("请求失败:", r.Request.URL, "-", r.StatusCode, "-", err)
-	})
-
-	// 设置并发线程数量
-	c.Limit(&colly.LimitRule{
-		Parallelism: 2, // 设置为2个并发线程
-	})
-
-	// 发起GET请求，开始网站目录扫描
-	err = c.Visit(targetSite)
-	if err != nil {
-		log.Fatal("访问网站失败:", err)
+	// 从通道中读取扫描结果并写入文件
+	for result := range resultChan {
+		file.WriteString(result)
 	}
-
-	// 等待所有goroutine完成
-	wg.Wait()
 }
