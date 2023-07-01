@@ -82,3 +82,27 @@ func main() {
 
 				// 完成goroutine，减少等待组计数
 				wg.Done()
+			}(link)
+		}
+	})
+
+	// 设置错误处理函数
+	c.OnError(func(r *colly.Response, err error) {
+		// 记录错误日志
+		log.Println("请求失败:", r.Request.URL, "-", r.StatusCode, "-", err)
+	})
+
+	// 设置并发线程数量
+	c.Limit(&colly.LimitRule{
+		Parallelism: 2, // 设置为2个并发线程
+	})
+
+	// 发起GET请求，开始网站目录扫描
+	err = c.Visit(targetSite)
+	if err != nil {
+		log.Fatal("访问网站失败:", err)
+	}
+
+	// 等待所有goroutine完成
+	wg.Wait()
+}
