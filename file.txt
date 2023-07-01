@@ -1,0 +1,6 @@
+admin/
+login/
+dashboard/
+config/
+backup/
+admin/backup
